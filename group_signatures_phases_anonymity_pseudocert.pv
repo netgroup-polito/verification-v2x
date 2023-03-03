@@ -1,0 +1,313 @@
+(* 
+   ENROLLMENT: 
+   Ciascun veicolo inizialmente ha un proprio ID e un enrollment certificate (asimmetrico), che utilizzerà per richiedere chiavi di gruppo.
+   Serve dare la possibilità anche all'attaccante di richiedere nuove chiavi di gruppo -> anche l'attaccante può ottenere ID ed enrollment certificates,
+   NOTA: anche più di uno. All'interno dell'enrollment certificate ho chiave pubblica e ID del veicolo
+
+   REGISTRATION:
+   Serve per ottenere le chiavi di gruppo.
+   Il veicolo (o l'attaccante) inserisce nella richiesta il suo ID. Firma la richiesta usando la chiave privata del suo enrollment certificate. Poi cifra
+   richiesta, firma sulla richiesta e suo enrollment certificate usando la chiave pubblica della CA (in questo modo l'attaccante non può scoprire ID del 
+   veicolo).
+   CA riceve la richiesta, la decifra, controlla che l'enrollment certificate sia valido, estrae la chiave pubblica dal certificato (serve per verificare la
+   firma), controlla che l'enrollment certificate non sia tra quelli revocati, controlla la firma sulla richiesta. Se tutto è Ok, crea una nuova chiave 
+   privata di gruppo per il veicolo, la inserisce nella risposta insieme all'ID del veicolo richiedente e alla chiave pubblica di gruppo. Firma la risposta
+   usando la sua chiave privata. Cifra risposta e firma utilizzando la chiave pubblica del veicolo (quella contenuta nell'enrollment certificate).
+   Il veicolo decifra la risposta, utilizzando la chiave privata dell'enrollment certificate, controlla la firma utilizzando la chiave pubblica della CA,
+   controlla l'ID all'interno della risposta (deve coincidere con il suo VID). Se è tutto Ok, il protocollo ha completato con successo.
+
+   VEHICLE SEND:
+   Avviene quando un veicolo vuole mandare un messaggio firmato anonimo. Per prima cosa deve crearsi il certificato pseudonimo (un certificato autogenerato 
+   firmato con la chiave privata di gruppo): si crea la coppia di chiavi pubblica-privata per il certificato pseudonimo, firma il certificato pseudonimo con la 
+   chiave privata di gruppo. Manda il messaggio, la firma sul messaggio fatta usando la chiave privata pseudonimo e il certificato pseudonimo.
+
+   VEHICLE RECEIVE:
+   Ricevo il messaggio. Verifico il certificato pseudonimo autogenerato dall'altro nodo (deve essere firmato con una chiave di gruppo privata valida, per fare
+   questa verifica utilizzo la chiave di gruppo pubblica). Verifico la firma, ovvero che sia stata fatta con la chiave privata associata al certificato
+   pseudonimo ricevuto. Se tutto è Ok, il messaggio ricevuto è valido: ovvero è stato mandato da un membro legittimo del gruppo.
+
+   VEHICLE REPORT:
+   Il veicolo riporta un messaggio maligno alla CA. Genero il report inserendo: pseudonimo certificato del nodo da revocare, firma sulla richiesta usando l'
+   enrollment certificate, enrollment certificate del veicolo richiedente. Cifro poi tutto con la chiave pubblica della CA.
+
+   CA REVOKE:
+   Usato quando la CA riceve richiesta per revocare un certificato. La richiesta per la revoca deve essere fatta da un veicolo legittimo. Quindi, la CA
+   riceve il messaggio di revoca, lo decifra, controlla la validità dell'enrollment certificate che ha fatto richiesta, controlla la firma sulla richiesta,
+   fa gopen per recuperare vid del veicolo maligno. Revoca Id del veicolo maligno. Poi avvia il processo per aggiornare le chiavi di gruppo, facendo in modo
+   che il veicolo maligno non riesca ad ottenere una nuova chiave privata di gruppo
+
+   ALTRE CONSIDERAZIONI:
+   - l'attaccante può conoscere la chiave pubblica contenuta nell'enrollment certificate di un veicolo???
+   - provare a vedere cosa succede aggiungendo una funzione che rilascia enrollment certificate ricevendo un id in input 
+     (può succedere che ci siano due enrollment certificate per lo stesso id)
+   - provare a modellare le ottimizzazioni
+   - anche l'attaccante può mandare e ricevere messaggi
+   - le richieste fatte alla CA devono essere cifrate con la chiave pubblica della CA??? (per ora sono tutte cifrate)
+   - controllare che gli eventi siano nel posto giusto (es prima degli output, dopo gli input, prima di una insert ecc)
+   - verificare la fase due dell'attaccante
+   
+   PHASE 0: rilascio delle chiavi per tutti i veicoli, i veicoli possono usare le chiavi per scambiarsi messaggi. Un veicolo può richiedere che un altro veicolo venga revocato.
+   PHASE 1: inizia il processo di revoca di un veicolo. La CA aggiunge il veicolo alla black list e aggiorna la group master secret key
+   PHASE 2: i veicoli posono richiedere aggiornamento della chiave, e ricominciano a comunicare tra loro
+
+*)
+
+
+free ch:channel. 	(* Public channel *)
+
+type pkey.
+type skey.
+type result.
+type gmskey.
+type gskey.
+type gpkey.
+type certype.
+
+const revoke_request:bitstring.
+const groupkey_request:bitstring.
+const groupkey_response:bitstring.
+
+(* Asymmetric signature *)
+fun pk(skey):pkey.
+fun sign(bitstring, skey):bitstring.
+fun ok():result.
+reduc forall m:bitstring, sk:skey; checksign(sign(m, sk), m, pk(sk)) = ok().
+
+(* Asymmetric encryption *)
+fun aenc(bitstring, pkey):bitstring.
+reduc forall m:bitstring, sk:skey; adec(aenc(m, pk(sk)), sk) = m.
+
+(* Certificate *)
+fun cert(bitstring, pkey, skey):certype [private].
+reduc forall vid:bitstring, vpk:pkey, sk:skey; checkcert(cert(vid, vpk, sk), pk(sk)) = ok().
+reduc forall vid:bitstring, vpk:pkey, sk:skey; getpk(cert(vid, vpk, sk)) = vpk.
+reduc forall vid:bitstring, vpk:pkey, sk:skey; getid(cert(vid, vpk, sk)) = vid.
+
+(* Group signature *)
+					(* Group master secret key: gmsk *)
+fun gpk(gmskey):gpkey.			(* Group public key: gpk(gmsk) *)
+fun gsk(bitstring, gmskey):gskey.	(* Vehicle private group secret key: gsk(vid, gmsk) *)
+fun gsign(bitstring, gskey):bitstring.	(* gsign(m, gsk) *)
+fun gok():result.
+(* reduc forall m:bitstring, vid:bitstring, gmsk:gmskey; gchecksign(gsign(m, gsk(vid, gmsk)), m, gpk(gmsk)) = gok().
+   reduc forall m:bitstring, vid:bitstring, gmsk:gmskey; gopen(gsign(m, gsk(vid, gmsk)), gmsk) = vid.	*)
+
+(* Pseudonym certificate *)
+fun pseudocert(pkey, gskey):certype.
+reduc forall pseudopk:pkey, vid:bitstring, gmsk:gmskey; checkpseudocert(pseudocert(pseudopk, gsk(vid, gmsk)), gpk(gmsk)) = gok().
+reduc forall pseudopk:pkey, vid:bitstring, gmsk:gmskey; getpseudopk(pseudocert(pseudopk, gsk(vid, gmsk))) = pseudopk.
+reduc forall pseudopk:pkey, vid:bitstring, gmsk:gmskey; gopen(pseudocert(pseudopk, gsk(vid, gmsk)), gmsk) = vid.
+reduc forall pseudopk:pkey, vid:bitstring, gmsk:gmskey; getvid(pseudocert(pseudopk, gsk(vid, gmsk))) = vid [private].
+
+
+(* Revoked certificates table *)
+table revokedcerts(bitstring).		(* vid of the revoked vehicle *)
+
+
+(* Events *)
+event ValidGroupPrivateKeyReceived(bitstring, gskey, gpkey).
+event ValidGroupPrivateKeySent(bitstring, gskey, gpkey).
+event ValidGroupKeyRequestReceived(skey, bitstring).
+event ValidGroupKeyRequestSent(bitstring).
+event RevokedCannotGetGroupKey(bitstring).
+event ValidMessageSent(bitstring, certype, bitstring).
+
+event ValidMessageReceived(bitstring, bitstring).
+event AttackerGetsEnrollmentCertificate(bitstring, pkey).
+event RevocationAsked(bitstring, certype).
+event ValidRevocationReportReceived(certype, certype).
+event RevokedVid(bitstring).
+event AlreadyRevoked(bitstring).
+event ValidMessageReceivedSenderVid(bitstring).
+event CASKReveal(skey).
+event CAGMSKReveal(gmskey).
+
+
+(* Q5 - Anonymity: a vehicle sending messages remains anonymous within the group 
+   i.e, the adversary cannot distinguish whether the message is sent by him or any other member in the group
+   !(gsk, P) |P{M/secret} ≈ !(gsk, P) *)
+
+
+
+
+let CASecretKeyReveal(cask:skey) = 
+	event CASKReveal(cask);
+	out(ch, cask).
+	
+let CAGroupMasterSecretKeyReveal(gmsk:gmskey) =
+	event CAGMSKReveal(gmsk);
+	out(ch, gmsk).
+
+
+let VehicleSendMessages(vid:bitstring, vgsk:gskey) = 
+	(* Create the pseudonym certificate *)
+	new vpseudosk:skey;
+	new anonymoussk:skey;
+	let vpseudopk = pk(choice[vpseudosk, anonymoussk]) in
+	let vpseudocert = pseudocert(vpseudopk, vgsk) in
+	
+	(* Vehicle can send multiple messages with the same pseudocert *)
+	!(	(* Broadcast message to send *)
+		new m:bitstring;
+		(* Sign the message *)
+		let signm = sign(m, vpseudosk) in
+		event ValidMessageSent(vid, vpseudocert, m);
+		out(ch, (m, signm, vpseudocert))
+	).
+
+
+let VehicleReceiveMessage(vid:bitstring, vgpk:gpkey) = 
+	in(ch, (m:bitstring, signm:bitstring, vpseudocert:certype));
+	(* Check pseudonym certificate*)
+	if checkpseudocert(vpseudocert, vgpk) = gok() then
+	(* Check message signature *)
+	let vpseudopk = getpseudopk(vpseudocert) in
+	if checksign(signm, m, vpseudopk) = ok() then
+	
+	(* Correct message *)
+	event ValidMessageReceived(vid, m);
+	event ValidMessageReceivedSenderVid(getvid(vpseudocert)).
+
+
+let VehicleReport(vid:bitstring, vsk:skey, vcert:certype, capk:pkey, vgpk:gpkey) = 
+	(* Vehicle receives an anonimous message *)
+	in(ch, (m:bitstring, signm:bitstring, vpseudocert:certype));
+	(* Check pseudonym certificate*)
+	if checkpseudocert(vpseudocert, vgpk) = gok() then
+	(* Check message signature *)
+	let vpseudopk = getpseudopk(vpseudocert) in
+	if checksign(signm, m, vpseudopk) = ok() then
+	
+	(* ... Vehicle understands this is a malicious message ... *)
+	(* Generates a report for the CA *)
+	let report = (vpseudocert, revoke_request) in
+	let signreport = sign(report, vsk) in
+	let encrevreq = aenc((report, signreport, vcert), capk) in
+
+	event RevocationAsked(vid, vpseudocert);
+	out(ch, encrevreq).
+	
+
+let VehicleRegistration(vid:bitstring, vsk:skey, vcert:certype, capk:pkey) =
+	(**  REGISTRATION **)
+	(* Request group private and public key *)
+	let req = groupkey_request in
+	let signreq = sign(req, vsk) in
+	let encsignreq = aenc((req, signreq, vcert), capk) in
+	
+	event ValidGroupKeyRequestSent(vid); 
+	out(ch, encsignreq);
+	in(ch, encsignresp:bitstring);
+	
+	(* Decrypt the response *)
+	let (resp:bitstring, signature:bitstring) = adec(encsignresp, vsk) in
+	(* Check signature *)
+	if checksign(signature, resp, capk) = ok() then
+	(* Check vid in the response *)
+	let (=groupkey_response, rvid:bitstring, vgsk:gskey, vgpk:gpkey) = resp in
+	if rvid = vid then
+	
+	event ValidGroupPrivateKeyReceived(vid, vgsk, vgpk);
+
+	( !VehicleSendMessages(vid, vgsk) | !VehicleReceiveMessage(vid, vgpk) | !VehicleReport(vid, vsk, vcert, capk, vgpk) ).
+	
+
+		
+let CARegister(gmsk:gmskey, cask: skey, capk:pkey) = 
+	in(ch, encsignreq:bitstring);
+	(* Decrypt the request *)
+	let (req:bitstring, signreq:bitstring, vcert:certype) = adec(encsignreq, cask) in
+	
+	if req = groupkey_request then
+	(* Check vehicle enrollment certificate *)
+	if checkcert(vcert, capk) = ok() then
+	let vpk = getpk(vcert) in
+	let vid = getid(vcert) in
+	(* Check if the enrollment certificate is revoked *)
+	get revokedcerts(=vid) in 
+	event RevokedCannotGetGroupKey(vid); 0 
+	else
+	(* Check signature on request *)
+	if checksign(signreq, req, vpk) = ok() then
+
+	event ValidGroupKeyRequestReceived(cask, vid);
+	
+	(* Create new group private secret key *)
+	let vgsk = gsk(vid, gmsk) in
+	let resp = (groupkey_response, vid, vgsk, gpk(gmsk)) in
+	let signresp = sign(resp, cask) in
+	let encsignresp = aenc((resp, signresp), vpk) in
+	
+	event ValidGroupPrivateKeySent(vid, vgsk, gpk(gmsk));
+	out(ch, encsignresp).
+	
+	
+let CARevoke(gmsk:gmskey, cask: skey, capk:pkey) = 
+	(* CA receives a revocation request *)
+	in(ch, encrevreq:bitstring);
+	(* Decrypt the report *)
+	let (report:bitstring, signreport:bitstring, vcert:certype) = adec(encrevreq, cask) in
+
+	(* Check vehicle enrollment certificate *)
+	if checkcert(vcert, capk) = ok() then
+	let vpk = getpk(vcert) in
+	let vid = getid(vcert) in
+	(* Check if the enrollment certificate is revoked *)
+	get revokedcerts(=vid) in 0 else		(* TODO controllare se corretto *)
+	(* Check signature on request *)
+	if checksign(signreport, report, vpk) = ok() then
+	let (torevokecert:certype, =revoke_request) = report in
+	
+	event ValidRevocationReportReceived(torevokecert, vcert);
+	
+	(* Extract the vid from cert *)
+	let torevokevid = gopen(torevokecert, gmsk) in
+	
+	(* Check that has not already been revoked *)
+	get revokedcerts(=torevokevid) in event AlreadyRevoked(torevokevid)
+	else
+	
+	event RevokedVid(torevokevid);
+	insert revokedcerts(torevokevid);
+	
+	(* TODO INIZIALIZZO PROCESSO PER AGGIORNAMENTO CHIAVE DI GRUPPO *)
+	phase 1;
+	(* Update group master secret key *)
+	new updatedgmsk:gmskey;
+	(* Start new phase: not revoked vehicles have to ask for a new key *)
+	phase 2;
+	!CARegister(updatedgmsk, cask, capk).
+
+
+
+process 
+	(* Create CA group master secret key, public key and private key*)
+	new gmsk:gmskey; new cask:skey;
+	let capk = pk(cask) in
+	out(ch, capk);
+	
+	(* Create vehicles *)
+	!(	(* Enrollment certificate *)
+		new vid:bitstring; 
+		new vsk:skey; 
+		let vpk = pk(vsk) in
+		let vcert = cert(vid, vpk, cask) in
+		( VehicleRegistration(vid, vsk, vcert, capk) | 
+		  phase 2;
+		  VehicleRegistration(vid, vsk, vcert, capk)
+		)
+	  )
+	(* Attacker can get enrollment certificates *)
+	|!(	(* Attacker enrollment certificate *)
+		new attvid:bitstring;
+		new attsk:skey;
+		let attpk = pk(attsk) in
+		let attcert = cert(attvid, attpk, cask) in
+		event AttackerGetsEnrollmentCertificate(attvid, attpk);
+		out(ch, (attvid, attsk, attcert))
+	)	
+	| !CARegister(gmsk, cask, capk)
+	| !CARevoke(gmsk, cask, capk)
+	(* | CASecretKeyReveal(cask)
+	| CAGroupMasterSecretKeyReveal(gmsk) *)
+
