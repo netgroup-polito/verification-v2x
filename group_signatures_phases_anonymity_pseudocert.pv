@@ -1,55 +1,8 @@
-(* 
-   ENROLLMENT: 
-   Ciascun veicolo inizialmente ha un proprio ID e un enrollment certificate (asimmetrico), che utilizzerà per richiedere chiavi di gruppo.
-   Serve dare la possibilità anche all'attaccante di richiedere nuove chiavi di gruppo -> anche l'attaccante può ottenere ID ed enrollment certificates,
-   NOTA: anche più di uno. All'interno dell'enrollment certificate ho chiave pubblica e ID del veicolo
-
-   REGISTRATION:
-   Serve per ottenere le chiavi di gruppo.
-   Il veicolo (o l'attaccante) inserisce nella richiesta il suo ID. Firma la richiesta usando la chiave privata del suo enrollment certificate. Poi cifra
-   richiesta, firma sulla richiesta e suo enrollment certificate usando la chiave pubblica della CA (in questo modo l'attaccante non può scoprire ID del 
-   veicolo).
-   CA riceve la richiesta, la decifra, controlla che l'enrollment certificate sia valido, estrae la chiave pubblica dal certificato (serve per verificare la
-   firma), controlla che l'enrollment certificate non sia tra quelli revocati, controlla la firma sulla richiesta. Se tutto è Ok, crea una nuova chiave 
-   privata di gruppo per il veicolo, la inserisce nella risposta insieme all'ID del veicolo richiedente e alla chiave pubblica di gruppo. Firma la risposta
-   usando la sua chiave privata. Cifra risposta e firma utilizzando la chiave pubblica del veicolo (quella contenuta nell'enrollment certificate).
-   Il veicolo decifra la risposta, utilizzando la chiave privata dell'enrollment certificate, controlla la firma utilizzando la chiave pubblica della CA,
-   controlla l'ID all'interno della risposta (deve coincidere con il suo VID). Se è tutto Ok, il protocollo ha completato con successo.
-
-   VEHICLE SEND:
-   Avviene quando un veicolo vuole mandare un messaggio firmato anonimo. Per prima cosa deve crearsi il certificato pseudonimo (un certificato autogenerato 
-   firmato con la chiave privata di gruppo): si crea la coppia di chiavi pubblica-privata per il certificato pseudonimo, firma il certificato pseudonimo con la 
-   chiave privata di gruppo. Manda il messaggio, la firma sul messaggio fatta usando la chiave privata pseudonimo e il certificato pseudonimo.
-
-   VEHICLE RECEIVE:
-   Ricevo il messaggio. Verifico il certificato pseudonimo autogenerato dall'altro nodo (deve essere firmato con una chiave di gruppo privata valida, per fare
-   questa verifica utilizzo la chiave di gruppo pubblica). Verifico la firma, ovvero che sia stata fatta con la chiave privata associata al certificato
-   pseudonimo ricevuto. Se tutto è Ok, il messaggio ricevuto è valido: ovvero è stato mandato da un membro legittimo del gruppo.
-
-   VEHICLE REPORT:
-   Il veicolo riporta un messaggio maligno alla CA. Genero il report inserendo: pseudonimo certificato del nodo da revocare, firma sulla richiesta usando l'
-   enrollment certificate, enrollment certificate del veicolo richiedente. Cifro poi tutto con la chiave pubblica della CA.
-
-   CA REVOKE:
-   Usato quando la CA riceve richiesta per revocare un certificato. La richiesta per la revoca deve essere fatta da un veicolo legittimo. Quindi, la CA
-   riceve il messaggio di revoca, lo decifra, controlla la validità dell'enrollment certificate che ha fatto richiesta, controlla la firma sulla richiesta,
-   fa gopen per recuperare vid del veicolo maligno. Revoca Id del veicolo maligno. Poi avvia il processo per aggiornare le chiavi di gruppo, facendo in modo
-   che il veicolo maligno non riesca ad ottenere una nuova chiave privata di gruppo
-
-   ALTRE CONSIDERAZIONI:
-   - l'attaccante può conoscere la chiave pubblica contenuta nell'enrollment certificate di un veicolo???
-   - provare a vedere cosa succede aggiungendo una funzione che rilascia enrollment certificate ricevendo un id in input 
-     (può succedere che ci siano due enrollment certificate per lo stesso id)
-   - provare a modellare le ottimizzazioni
-   - anche l'attaccante può mandare e ricevere messaggi
-   - le richieste fatte alla CA devono essere cifrate con la chiave pubblica della CA??? (per ora sono tutte cifrate)
-   - controllare che gli eventi siano nel posto giusto (es prima degli output, dopo gli input, prima di una insert ecc)
-   - verificare la fase due dell'attaccante
-   
-   PHASE 0: rilascio delle chiavi per tutti i veicoli, i veicoli possono usare le chiavi per scambiarsi messaggi. Un veicolo può richiedere che un altro veicolo venga revocato.
-   PHASE 1: inizia il processo di revoca di un veicolo. La CA aggiunge il veicolo alla black list e aggiorna la group master secret key
-   PHASE 2: i veicoli posono richiedere aggiornamento della chiave, e ricominciano a comunicare tra loro
-
+(*
+time proverif group_signatures_phases_anonymity_pseudocert.pv
+real 0m1,145s
+user 0m1,132s
+sys 0m0,013s
 *)
 
 
